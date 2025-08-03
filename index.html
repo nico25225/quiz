@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI搭載 クイズWebツール</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+        // 固定問題カートリッジを登録するためのグローバル配列
+        window.quizCartridges = [];
+    </script>
+    <style>
+        /* カスタムスタイル */
+        .screen { display: none; }
+        .active-screen { display: block; }
+        .btn {
+            @apply text-white font-bold py-3 px-6 rounded-lg shadow-md transition-all duration-300 ease-in-out;
+        }
+        .btn-primary { @apply bg-blue-500 hover:bg-blue-600; }
+        .btn-secondary { @apply bg-gray-500 hover:bg-gray-600; }
+        .btn-green { @apply bg-green-500 hover:bg-green-600; }
+        .btn-red { @apply bg-red-500 hover:bg-red-600; }
+        .option-btn {
+            @apply w-full text-left p-4 border-2 border-gray-300 rounded-lg transition-all duration-200;
+        }
+        .option-btn.selected { @apply border-blue-500 bg-blue-100; }
+        .option-btn.correct { @apply bg-green-200 border-green-500; }
+        .option-btn.incorrect { @apply bg-red-200 border-red-500; }
+        #feedback-panel {
+            min-height: 100px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans text-gray-800">
+
+    <div id="app" class="container mx-auto p-4 max-w-4xl">
+
+        <!-- APIキー入力画面 -->
+        <div id="apiKeyScreen" class="screen active-screen bg-white p-8 rounded-xl shadow-lg text-center">
+            <h1 class="text-3xl font-bold mb-4">ようこそ！</h1>
+            <p class="text-gray-600 mb-6">まず、Gemini APIキーを入力してください。</p>
+            <input type="password" id="apiKeyInput" class="w-full max-w-md mx-auto p-3 border border-gray-300 rounded-lg mb-6" placeholder="APIキーをここに貼り付け">
+            <button id="saveApiKeyBtn" class="btn btn-primary">APIキーを保存して開始</button>
+            <p class="text-xs text-gray-500 mt-4">APIキーはブラウザ内にのみ保存され、外部には送信されません。</p>
+        </div>
+
+        <!-- ホーム画面 -->
+        <div id="homeScreen" class="screen bg-white p-8 rounded-xl shadow-lg text-center">
+            <h1 class="text-3xl font-bold mb-8">クイズモード選択</h1>
+            <div class="grid md:grid-cols-2 gap-8">
+                <div class="p-6 border rounded-lg hover:shadow-xl transition-shadow">
+                    <h2 class="text-2xl font-semibold mb-4">Geminiモード</h2>
+                    <p class="text-gray-600 mb-6">PDFをアップロードして、AIが自動でクイズを生成します。</p>
+                    <button id="geminiModeBtn" class="btn btn-primary w-full">Geminiモードを開始</button>
+                </div>
+                <div class="p-6 border rounded-lg hover:shadow-xl transition-shadow">
+                    <h2 class="text-2xl font-semibold mb-4">固定問題モード</h2>
+                    <p class="text-gray-600 mb-6">あらかじめ用意された問題集からクイズに挑戦します。</p>
+                    <button id="fixedModeBtn" class="btn btn-secondary w-full">固定問題モードを開始</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 固定問題選択画面 -->
+        <div id="fixedQuizSelectScreen" class="screen bg-white p-8 rounded-xl shadow-lg">
+            <button class="mb-6 text-blue-500 hover:underline" onclick="showScreen('home')">&lt; ホームに戻る</button>
+            <h1 class="text-3xl font-bold mb-6 text-center">固定問題集を選択</h1>
+            <div id="fixedQuizList" class="space-y-4">
+                <!-- カートリッジから動的に生成 -->
+            </div>
+        </div>
+
+        <!-- Geminiモード PDFアップロード画面 -->
+        <div id="geminiModeSetupScreen" class="screen bg-white p-8 rounded-xl shadow-lg">
+            <button class="mb-6 text-blue-500 hover:underline" onclick="showScreen('home')">&lt; ホームに戻る</button>
+            <h1 class="text-3xl font-bold mb-4 text-center">クイズ生成 (Geminiモード)</h1>
+            <p class="text-gray-600 mb-6 text-center">クイズを生成したいPDFファイル (最大10個) を選択してください。</p>
+            <div class="mb-6 p-6 border-2 border-dashed border-gray-300 rounded-lg text-center">
+                <input type="file" id="pdfUpload" multiple accept=".pdf" class="hidden">
+                <label for="pdfUpload" class="cursor-pointer text-blue-500 hover:underline">
+                    ファイルを選択
+                </label>
+                <p id="fileList" class="mt-2 text-sm text-gray-500">選択されていません</p>
+            </div>
+            <div class="text-center">
+                <button id="generateQuizBtn" class="btn btn-primary" disabled>クイズを生成</button>
+            </div>
+            <div id="generationStatus" class="mt-6 text-center text-lg font-semibold text-gray-700"></div>
+        </div>
+
+        <!-- クイズ開始画面 -->
+        <div id="startQuizScreen" class="screen bg-white p-8 rounded-xl shadow-lg text-center">
+            <h1 id="quizTitle" class="text-3xl font-bold mb-4"></h1>
+            <p id="quizDescription" class="text-gray-600 mb-8"></p>
+            <button id="startQuizBtn" class="btn btn-green text-xl">クイズを開始する</button>
+            <button class="block mx-auto mt-6 text-blue-500 hover:underline" onclick="goBackToSelect()"> &lt; 別の問題を選ぶ</button>
+        </div>
+
+        <!-- クイズ画面 -->
+        <div id="quizScreen" class="screen">
+            <div class="bg-white p-8 rounded-xl shadow-lg">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold">問題 <span id="questionNumber"></span>/10</h2>
+                    <div class="text-lg font-semibold">スコア: <span id="currentScore">0</span></div>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5 mb-6">
+                    <div id="progressBar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+                </div>
+                <p id="questionText" class="text-xl mb-6 min-h-[6rem]"></p>
+                <div id="optionsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- 選択肢ボタンがここに表示される -->
+                </div>
+            </div>
+            <div id="feedback-panel" class="mt-4 p-6 bg-white rounded-xl shadow-lg">
+                 <!-- 正誤判定と解説がここに表示される -->
+            </div>
+            <div class="text-center mt-6 flex justify-center gap-4">
+                <button id="prevQuestionBtn" class="btn btn-secondary" disabled>前の問題へ</button>
+                <button id="nextQuestionBtn" class="btn btn-primary" disabled>次の問題へ</button>
+            </div>
+        </div>
+
+        <!-- 結果画面 -->
+        <div id="resultsScreen" class="screen bg-white p-8 rounded-xl shadow-lg">
+            <h1 class="text-4xl font-bold text-center mb-4">結果発表</h1>
+            <div class="text-center mb-8">
+                <p class="text-2xl">正答率: <span id="finalRate" class="font-bold"></span>%</p>
+                <p class="text-2xl">スコア: <span id="finalScore" class="font-bold"></span> / 10</p>
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-4 mb-8">
+                <button id="redoIncorrectBtn" class="btn btn-red w-full">間違った問題を解きなおす</button>
+                <button id="redoSameBtn" class="btn btn-secondary w-full">同じ問題を解きなおす</button>
+                <button id="newQuizBtn" class="btn btn-green w-full">違う問題を解く</button>
+            </div>
+            
+            <div class="mt-8 text-center">
+                <button id="goHomeBtn" class="btn btn-primary">ホーム画面に戻る</button>
+            </div>
+            
+            <hr class="my-8">
+
+            <div>
+                <h2 class="text-2xl font-bold mb-4">解説一覧</h2>
+                <div class="flex items-center space-x-4 mb-4 text-sm text-gray-600">
+                    <span>解説ボタン:</span>
+                    <span class="flex items-center"><div class="w-4 h-4 rounded-full bg-blue-500 mr-1"></div>Geminiが解説</span>
+                    <span id="textBasedLegend" class="flex items-center"><div class="w-4 h-4 rounded-full bg-red-500 mr-1"></div>テキストを基に解説</span>
+                </div>
+                <div id="explanationList" class="space-y-4">
+                    <!-- 間違った問題の解説がここに表示される -->
+                </div>
+            </div>
+        </div>
+        
+        <!-- ローディング/メッセージモーダル -->
+        <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" style="display: none;">
+            <div class="bg-white p-8 rounded-lg shadow-xl text-center">
+                <div id="modalSpinner" class="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-500 mx-auto mb-4"></div>
+                <p id="modalText" class="text-lg font-semibold"></p>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- グローバル変数 ---
+        let apiKey = '';
+        let currentQuiz = [];
+        let originalQuizSet = [];
+        let currentQuestionIndex = 0;
+        let score = 0;
+        let userAnswers = [];
+        let currentMode = ''; // 'gemini' or 'fixed'
+        let fullPdfText = ''; // Geminiモード用
+        let backgroundGenerationPromise = null;
+
+        // --- DOM要素 ---
+        const screens = {
+            apiKey: document.getElementById('apiKeyScreen'),
+            home: document.getElementById('homeScreen'),
+            fixedSelect: document.getElementById('fixedQuizSelectScreen'),
+            geminiSetup: document.getElementById('geminiModeSetupScreen'),
+            start: document.getElementById('startQuizScreen'),
+            quiz: document.getElementById('quizScreen'),
+            results: document.getElementById('resultsScreen'),
+        };
+        const modal = document.getElementById('modal');
+        const modalText = document.getElementById('modalText');
+        const modalSpinner = document.getElementById('modalSpinner');
+
+        // --- 初期化処理 ---
+        window.onload = () => {
+            apiKey = localStorage.getItem('geminiApiKey');
+            
+            if (apiKey) {
+                showScreen('home');
+            } else {
+                showScreen('apiKey');
+            }
+            setupEventListeners();
+            populateFixedQuizList();
+        };
+
+        // --- 画面遷移 ---
+        function showScreen(screenName) {
+            Object.values(screens).forEach(s => s.classList.remove('active-screen'));
+            if (screens[screenName]) { // エラー防止
+                screens[screenName].classList.add('active-screen');
+            }
+        }
+        
+        function goBackToSelect() {
+            if (currentMode === 'fixed') {
+                showScreen('fixedSelect');
+            } else {
+                showScreen('geminiSetup');
+            }
+        }
+
+        // --- イベントリスナー設定 ---
+        // ★更新: より安全なイベントリスナー設定方法に変更
+        function setupEventListeners() {
+            // ヘルパー関数：要素が存在する場合のみイベントリスナーを追加
+            const addListener = (id, event, handler) => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.addEventListener(event, handler);
+                } else {
+                    // 開発中にどの要素が見つからないかを知るのに役立つ
+                    console.warn(`[Setup Warning] Element with id "${id}" not found.`);
+                }
+            };
+
+            addListener('saveApiKeyBtn', 'click', saveApiKey);
+            addListener('geminiModeBtn', 'click', () => {
+                currentMode = 'gemini';
+                showScreen('geminiSetup');
+                resetGeminiSetup();
+            });
+            addListener('fixedModeBtn', 'click', () => {
+                currentMode = 'fixed';
+                showScreen('fixedSelect');
+            });
+            addListener('pdfUpload', 'change', handleFileSelect);
+            addListener('generateQuizBtn', 'click', generateQuizFromPdfs);
+            addListener('startQuizBtn', 'click', startQuiz);
+            addListener('prevQuestionBtn', 'click', previousQuestion);
+            addListener('nextQuestionBtn', 'click', nextQuestion);
+            addListener('redoIncorrectBtn', 'click', redoIncorrect);
+            addListener('redoSameBtn', 'click', redoSame);
+            addListener('newQuizBtn', 'click', startNewQuiz);
+            addListener('goHomeBtn', 'click', () => showScreen('home'));
+        }
+        
+        function populateFixedQuizList() {
+            const listContainer = document.getElementById('fixedQuizList');
+            listContainer.innerHTML = '';
+            if (window.quizCartridges.length === 0) {
+                listContainer.innerHTML = '<p class="text-gray-500 text-center">利用可能な問題集がありません。<br>カートリッジファイル(.js)をindex.htmlで読み込んでいるか確認してください。</p>';
+                return;
+            }
+            window.quizCartridges.forEach((cartridge, index) => {
+                const button = document.createElement('button');
+                button.className = 'w-full text-left p-4 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors';
+                button.innerHTML = `<h3 class="text-xl font-semibold">${cartridge.title}</h3>`;
+                button.onclick = () => selectFixedQuiz(index);
+                listContainer.appendChild(button);
+            });
+        }
+
+        // --- APIキー処理 ---
+        function saveApiKey() {
+            const keyInput = document.getElementById('apiKeyInput').value;
+            if (keyInput.trim()) {
+                apiKey = keyInput.trim();
+                localStorage.setItem('geminiApiKey', apiKey);
+                showScreen('home');
+            } else {
+                // alert()の代わりにモーダルを使用
+                showModal('APIキーを入力してください。', false);
+                setTimeout(hideModal, 2000);
+            }
+        }
+
+        // --- クイズ選択と開始 ---
+        function selectFixedQuiz(index) {
+            const cartridge = window.quizCartridges[index];
+            originalQuizSet = cartridge.questions;
+            prepareQuiz(cartridge.title, '用意された問題集から10問が出題されます。');
+        }
+
+        function prepareQuiz(title, description) {
+            document.getElementById('quizTitle').innerText = title;
+            document.getElementById('quizDescription').innerText = description;
+            showScreen('start');
+        }
+
+        function startQuiz() {
+            score = 0;
+            currentQuestionIndex = 0;
+            userAnswers = [];
+            
+            if (currentMode === 'gemini') {
+                // Geminiモードの場合、最初の10問はすでに生成済み
+                currentQuiz = originalQuizSet.slice(0, 10);
+            } else {
+                // 固定問題モードの場合、シャッフルして10問選ぶ
+                currentQuiz = shuffleArray([...originalQuizSet]).slice(0, 10);
+            }
+
+            if (currentQuiz.length === 0) {
+                alert('出題できる問題がありません。');
+                goBackToSelect();
+                return;
+            }
+            
+            showScreen('quiz');
+            loadQuestion();
+        }
+
+        // --- クイズ進行 ---
+        function loadQuestion() {
+            // フィードバックをリセット
+            const feedbackPanel = document.getElementById('feedback-panel');
+            feedbackPanel.innerHTML = '';
+            document.getElementById('prevQuestionBtn').disabled = currentQuestionIndex === 0;
+            document.getElementById('nextQuestionBtn').disabled = true;
+
+            const question = currentQuiz[currentQuestionIndex];
+            document.getElementById('questionNumber').innerText = currentQuestionIndex + 1;
+            document.getElementById('currentScore').innerText = score;
+            document.getElementById('progressBar').style.width = `${((currentQuestionIndex) / currentQuiz.length) * 100}%`;
+            document.getElementById('questionText').innerText = question.question;
+
+            const optionsContainer = document.getElementById('optionsContainer');
+            optionsContainer.innerHTML = '';
+            const shuffledOptions = shuffleArray([...question.options]);
+
+            shuffledOptions.forEach(option => {
+                const button = document.createElement('button');
+                button.className = 'option-btn';
+                button.innerText = option;
+                button.onclick = () => selectAnswer(option, question.answer);
+                optionsContainer.appendChild(button);
+            });
+        }
+
+        function selectAnswer(selectedOption, correctOption) {
+            // 回答後の再クリックを無効化
+            const optionButtons = document.querySelectorAll('.option-btn');
+            optionButtons.forEach(btn => btn.disabled = true);
+            document.getElementById('prevQuestionBtn').disabled = true;
+
+            const isCorrect = selectedOption === correctOption;
+            userAnswers.push({
+                question: currentQuiz[currentQuestionIndex],
+                selected: selectedOption,
+                isCorrect: isCorrect
+            });
+
+            if (isCorrect) {
+                score++;
+                document.getElementById('currentScore').innerText = score;
+            }
+
+            // フィードバック表示
+            const feedbackPanel = document.getElementById('feedback-panel');
+            let feedbackHTML = '';
+            if (isCorrect) {
+                feedbackHTML = `<h3 class="text-2xl font-bold text-green-600 mb-2">正解！</h3><p class="text-lg">あなたの回答: ${selectedOption}</p>`;
+            } else {
+                feedbackHTML = `<h3 class="text-2xl font-bold text-red-600 mb-2">不正解...</h3>
+                                <p class="text-lg">あなたの回答: ${selectedOption}</p>
+                                <p class="text-lg">正解: ${correctOption}</p>
+                                <p class="mt-2 text-gray-700"><b>解説:</b> ${currentQuiz[currentQuestionIndex].explanation}</p>`;
+            }
+            feedbackPanel.innerHTML = feedbackHTML;
+
+            // 選択肢のハイライト
+            optionButtons.forEach(btn => {
+                if (btn.innerText === selectedOption) {
+                    btn.classList.add(isCorrect ? 'correct' : 'incorrect');
+                } else if (btn.innerText === correctOption) {
+                    btn.classList.add('correct');
+                }
+            });
+
+            document.getElementById('nextQuestionBtn').disabled = false;
+        }
+        
+        function previousQuestion() {
+            if (currentQuestionIndex > 0) {
+                currentQuestionIndex--;
+                const lastAnswer = userAnswers.pop();
+                if (lastAnswer && lastAnswer.isCorrect) {
+                    score--;
+                }
+                loadQuestion();
+            }
+        }
+
+        function nextQuestion() {
+            currentQuestionIndex++;
+            if (currentQuestionIndex < currentQuiz.length) {
+                loadQuestion();
+            } else {
+                document.getElementById('progressBar').style.width = '100%';
+                showResults();
+            }
+        }
+
+        // --- 結果処理 ---
+        function showResults() {
+            showScreen('results');
+            const correctCount = userAnswers.filter(a => a.isCorrect).length;
+            const totalCount = userAnswers.length;
+            const rate = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
+
+            document.getElementById('finalRate').innerText = rate;
+            document.getElementById('finalScore').innerText = score;
+            
+            document.getElementById('redoIncorrectBtn').style.display = (score < totalCount) ? 'block' : 'none';
+            document.getElementById('textBasedLegend').style.display = (currentMode === 'gemini') ? 'flex' : 'none';
+
+            const explanationList = document.getElementById('explanationList');
+            explanationList.innerHTML = '';
+            userAnswers.forEach((answer, index) => {
+                const item = document.createElement('div');
+                item.className = `p-4 rounded-lg ${answer.isCorrect ? 'bg-green-50' : 'bg-red-50'}`;
+                let html = `
+                    <p class="font-bold mb-2">Q${index + 1}: ${answer.question.question}</p>
+                    <p>あなたの回答: ${answer.selected} ${answer.isCorrect ? '✅' : '❌'}</p>
+                    ${!answer.isCorrect ? `<p>正解: ${answer.question.answer}</p>` : ''}
+                    <p class="mt-2 text-sm text-gray-600"><b>基本解説:</b> ${answer.question.explanation}</p>
+                    <div class="mt-2">
+                        <button class="w-6 h-6 rounded-full bg-blue-500 hover:bg-blue-600 focus:outline-none" title="Geminiが詳しく解説" onclick="getDetailedExplanation(this)"></button>
+                `;
+                if (currentMode === 'gemini') {
+                    html += `<button class="w-6 h-6 rounded-full bg-red-500 hover:bg-red-600 focus:outline-none ml-2" title="テキストを基に解説" onclick="getDetailedExplanation(this, 'text_based')"></button>`;
+                }
+                html += `</div><div class="explanation-details mt-2 text-sm p-3 bg-gray-100 rounded" style="display:none;"></div>`;
+                item.innerHTML = html;
+                // 質問データをボタンに埋め込む
+                item.querySelector('button[title="Geminiが詳しく解説"]').dataset.question = answer.question.question;
+                if (currentMode === 'gemini') {
+                    item.querySelector('button[title="テキストを基に解説"]').dataset.question = answer.question.question;
+                }
+
+                explanationList.appendChild(item);
+            });
+        }
+
+        async function getDetailedExplanation(buttonEl, type = 'general') {
+            const question = buttonEl.dataset.question;
+            const detailsContainer = buttonEl.parentElement.nextElementSibling;
+            if (detailsContainer.style.display === 'block') {
+                detailsContainer.style.display = 'none';
+                return;
+            }
+
+            detailsContainer.style.display = 'block';
+            detailsContainer.innerHTML = '<p>解説を生成中...</p>';
+
+            let prompt;
+            if (type === 'general') {
+                prompt = `以下の質問について、初心者に分かりやすく、詳しく解説してください。\n\n質問：${question}`;
+            } else {
+                prompt = `以下のテキストのみを情報源として、下記の質問に忠実に解説してください。テキストに情報がない場合は「テキストに準拠した解説はできません」と回答してください。\n\n--- テキスト ---\n${fullPdfText}\n\n--- 質問 ---\n${question}`;
+            }
+
+            try {
+                const result = await callGeminiAPI(prompt);
+                detailsContainer.innerHTML = result.replace(/\n/g, '<br>');
+            } catch (error) {
+                console.error('Detailed explanation error:', error);
+                detailsContainer.innerHTML = `<p class="text-red-500">解説の生成に失敗しました: ${error.message}</p>`;
+            }
+        }
+
+        // --- リトライ処理 ---
+        function redoIncorrect() {
+            const incorrectQuestions = userAnswers.filter(a => !a.isCorrect).map(a => a.question);
+            if (incorrectQuestions.length > 0) {
+                currentQuiz = incorrectQuestions;
+                score = 0;
+                currentQuestionIndex = 0;
+                userAnswers = [];
+                showScreen('quiz');
+                loadQuestion();
+            }
+        }
+
+        function redoSame() {
+            currentQuiz = userAnswers.map(a => a.question);
+            score = 0;
+            currentQuestionIndex = 0;
+            userAnswers = [];
+            showScreen('quiz');
+            loadQuestion();
+        }
+
+        async function startNewQuiz() {
+            if (currentMode === 'fixed') {
+                startQuiz(); // シャッフルして新しい10問
+            } else {
+                // Geminiモードで新しい問題
+                showModal('新しい問題を準備中...');
+                try {
+                    // バックグラウンドで生成中の90問があればそれを使う
+                    if (backgroundGenerationPromise) {
+                        const remainingQuestions = await backgroundGenerationPromise;
+                        originalQuizSet.push(...remainingQuestions);
+                        backgroundGenerationPromise = null; // 使い切った
+                    }
+                    
+                    // すでに出題した問題のリストを作成
+                    const usedQuestionTexts = userAnswers.map(a => a.question.question);
+                    // まだ出題していない問題のみをフィルタリング
+                    const availableQuestions = originalQuizSet.filter(q => !usedQuestionTexts.includes(q.question));
+
+                    if (availableQuestions.length >= 10) {
+                        // 利用可能な問題から新しいクイズセットを作成
+                        originalQuizSet = availableQuestions; // originalQuizSetを更新
+                        currentQuiz = shuffleArray([...originalQuizSet]).slice(0, 10);
+                        score = 0;
+                        currentQuestionIndex = 0;
+                        userAnswers = [];
+                        hideModal();
+                        showScreen('quiz');
+                        loadQuestion();
+                    } else {
+                        hideModal();
+                        alert('利用可能な新しい問題がもうありません。新しいPDFでクイズを生成してください。');
+                        showScreen('geminiSetup');
+                    }
+                } catch (error) {
+                    hideModal();
+                    alert('新しい問題の準備に失敗しました: ' + error.message);
+                }
+            }
+        }
+
+        // --- Geminiモード関連 ---
+        function resetGeminiSetup() {
+            document.getElementById('pdfUpload').value = '';
+            document.getElementById('fileList').textContent = '選択されていません';
+            document.getElementById('generateQuizBtn').disabled = true;
+            document.getElementById('generationStatus').textContent = '';
+            fullPdfText = '';
+            originalQuizSet = [];
+            backgroundGenerationPromise = null;
+        }
+
+        function handleFileSelect(event) {
+            const files = event.target.files;
+            const fileListEl = document.getElementById('fileList');
+            if (files.length > 0) {
+                if (files.length > 10) {
+                    alert('PDFファイルは10個まで選択できます。');
+                    event.target.value = ''; // 選択をリセット
+                    fileListEl.textContent = '選択されていません';
+                    document.getElementById('generateQuizBtn').disabled = true;
+                    return;
+                }
+                fileListEl.textContent = `${files.length}個のファイルを選択中`;
+                document.getElementById('generateQuizBtn').disabled = false;
+            } else {
+                fileListEl.textContent = '選択されていません';
+                document.getElementById('generateQuizBtn').disabled = true;
+            }
+        }
+
+        async function generateQuizFromPdfs() {
+            const files = document.getElementById('pdfUpload').files;
+            if (files.length === 0) return;
+
+            showModal('PDFを読み込んでテキストを抽出中...');
+            
+            try {
+                let combinedText = '';
+                for (const file of files) {
+                    const text = await extractTextFromPdf(file);
+                    combinedText += `\n\n--- PDF: ${file.name} ---\n` + text;
+                }
+                fullPdfText = combinedText;
+
+                modalText.textContent = 'クイズを生成中... (1/2)';
+                
+                const prompt10 = createGenerationPrompt(10);
+                const first10Questions = await callGeminiAPI(prompt10, true);
+                originalQuizSet = first10Questions;
+
+                // バックグラウンドで残り90問を生成開始
+                backgroundGenerationPromise = (async () => {
+                    const prompt90 = createGenerationPrompt(90);
+                    try {
+                         return await callGeminiAPI(prompt90, true);
+                    } catch(e) {
+                        console.error("Background generation failed:", e);
+                        return []; // 失敗した場合は空配列を返す
+                    }
+                })();
+
+                hideModal();
+                document.getElementById('generationStatus').textContent = '準備ができました！';
+                prepareQuiz('生成されたクイズ', 'アップロードされたPDFからAIが生成した問題です。');
+
+            } catch (error) {
+                hideModal();
+                console.error('Quiz generation error:', error);
+                alert(`クイズの生成に失敗しました: ${error.message}`);
+            }
+        }
+        
+        function createGenerationPrompt(count) {
+            return `以下のテキストに基づいて、IT初学者向けの4択クイズを${count}問、厳格なJSON形式で生成してください。
+各問題には、"question"（問題文）、"options"（4つの選択肢の配列）、"answer"（正解の選択肢）、"explanation"（簡潔な解説）の4つのキーを含めてください。
+options配列の要素の1つが必ずanswerと一致するようにしてください。
+
+---
+テキスト:
+${fullPdfText}
+---
+
+JSON形式の例:
+[
+  {
+    "question": "これは問題文の例です。",
+    "options": ["選択肢A", "選択肢B", "選択肢C", "選択肢D"],
+    "answer": "選択肢C",
+    "explanation": "これは解説の例です。"
+  }
+]
+`;
+        }
+        
+        async function extractTextFromPdf(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            let text = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+                text += content.items.map(item => item.str).join(' ') + '\n';
+            }
+            return text;
+        }
+
+        // --- Gemini API 呼び出し ---
+        async function callGeminiAPI(prompt, isJson = false) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {}
+            };
+
+            if (isJson) {
+                payload.generationConfig.responseMimeType = "application/json";
+            }
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error.message || `API Error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            if (!data.candidates || !data.candidates[0].content.parts[0]) {
+                throw new Error("APIから無効なレスポンスが返されました。");
+            }
+            
+            const responseText = data.candidates[0].content.parts[0].text;
+            return isJson ? JSON.parse(responseText) : responseText;
+        }
+
+        // --- ユーティリティ ---
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+        
+        function showModal(text, showSpinner = true) {
+            modalText.textContent = text;
+            modalSpinner.style.display = showSpinner ? 'block' : 'none';
+            modal.style.display = 'flex';
+        }
+
+        function hideModal() {
+            modal.style.display = 'none';
+        }
+
+    </script>
+    
+    <!-- ★更新: カートリッジはこちらで直接読み込みます -->
+    <script src="quiz-cartridge-network.js"></script>
+    <script src="quiz-cartridge-ip.js"></script>
+    <!-- 新しいカートリッジを追加する場合は、この下に追記してください -->
+    <!-- <script src="quiz-cartridge-new.js"></script> -->
+
+</body>
+</html>
